@@ -562,3 +562,47 @@ func (v *validator) logDuties(slot uint64, duties []*ethpb.DutiesResponse_Duty) 
 func validatorSubscribeKey(slot uint64, committeeID uint64) [64]byte {
 	return bytesutil.ToBytes64(append(bytesutil.Bytes32(slot), bytesutil.Bytes32(committeeID)...))
 }
+
+// ...
+func (v *validator) FetchAccountStatuses(ctx context.Context, pubKeys [][]byte) ([]*ethpb.ValidatorStatusResponse, error) {
+	ctx, span := trace.StartSpan(ctx, "validator.FetchAccountStatuses")
+	defer span.End()
+
+	// Return if cached??
+
+	statuses := make([]*ethpb.ValidatorStatusResponse, 0, len(pubKeys))
+	errorChannel := make(chan error, len(pubKeys))
+	statusChannel := make(chan *ethpb.ValidatorStatusResponse, len(pubKeys))
+
+	for _, pubKey := range pubKeys {
+		go v.fetchValidatorStatus(ctx, pubKey, statusChannel, errorChannel)
+	}
+
+	var err error
+	for i := 0; i < len(pubKeys); i++ {
+		select {
+		case status := <-statusChannel:
+			statuses = append(statuses, status)
+		case e := <-errorChannel:
+			err = e
+		}
+	}
+
+	// Update DB??
+
+	return statuses, err
+}
+
+// ...
+func (v *validator) fetchValidatorStatus(
+	ctx context.Context,
+	pubKey []byte,
+	statusChannel chan *ethpb.ValidatorStatusResponse,
+	errorChannel chan error) {
+	status, err := v.validatorClient.ValidatorStatus(ctx, &ethpb.ValidatorStatusRequest{PublicKey: pubKey})
+	if err != nil {
+		errorChannel <- errors.Wrap(err, "could not fetch account statuses via the BeaconNodeValidatorClient")
+		return
+	}
+	statusChannel <- status
+}
